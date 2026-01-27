@@ -55,22 +55,33 @@ import java.io.PrintWriter
         }
       }.l
 
-  // Missing types = typeDecls referenced but defined outside extracted or external
-  val missingTypes =
-    cpg.typeDecl
-      .filter { td =>
-        val f = td.file.name.headOption.getOrElse("")
-        td.isExternal || !inExtracted(f)
-      }
-      .map { td =>
-        Map(
-          "kind" -> "type",
-          "reason" -> (if (td.isExternal) "external_type" else "defined_outside_extracted"),
-          "name" -> td.name,
-          "fullName" -> td.fullName,
-          "file" -> td.file.name.headOption.getOrElse("")
-        )
-      }.l
+  val builtins = Set(
+  "ANY","void","bool","char","int","size_t","int64_t","nullptr_t","volatile",
+  "<global>","main"
+)
+
+val missingTypes =
+  cpg.typeDecl
+    // drop synthetic/include-only types
+    .filterNot(td => td.file.name.headOption.getOrElse("") == "<includes>")
+    .filterNot(td => builtins.contains(td.name))
+    // keep only TF namespace (adjust pattern if your CPG uses different naming)
+    .filter(td => td.fullName.startsWith("tensorflow") || td.fullName.contains("tensorflow"))
+    // still apply: external/outside EXTRACTED root
+    .filter { td =>
+      val f = td.file.name.headOption.getOrElse("")
+      td.isExternal || !inExtracted(f)
+    }
+    .map { td =>
+      Map(
+        "kind" -> "type",
+        "reason" -> (if (td.isExternal) "external_type" else "defined_outside_extracted"),
+        "name" -> td.name,
+        "fullName" -> td.fullName,
+        "file" -> td.file.name.headOption.getOrElse("")
+      )
+    }.l
+
 
   val all = missingCalls ++ missingTypes
 
