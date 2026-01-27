@@ -1,5 +1,6 @@
 import io.shiftleft.semanticcpg.language._
 import java.io.PrintWriter
+import java.nio.file.{Paths, Files}
 
 @main def main() = {
   val outJson = sys.env.getOrElse("OUT_JSON", "")
@@ -9,8 +10,10 @@ import java.io.PrintWriter
     sys.exit(1)
   }
 
-  def inExtracted(p: String): Boolean =
-    p != null && p.nonEmpty && p.startsWith(extractedRoot)
+  def inExtracted(p: String): Boolean = {
+  if (p == null || p.isEmpty) false
+  else Files.exists(Paths.get(extractedRoot).resolve(p))
+}
 
   // Missing calls = calls whose target method is external OR not defined in EXTRACTED
   val missingCalls =
@@ -55,35 +58,48 @@ import java.io.PrintWriter
         }
       }.l
 
-  val builtins = Set(
+
+val builtins = Set(
   "ANY","void","bool","char","int","size_t","int64_t","nullptr_t","volatile",
   "<global>","main"
 )
 
-val missingTypes =
+def isNoiseType(t: String): Boolean =
+  t == null || t.isEmpty || builtins.contains(t) || t.startsWith("char[") || t.contains("[")
+
+// 1) Types referenced in code (usage frontier)
+val referencedTypes =
+  (cpg.identifier.typeFullName.l ++
+   cpg.local.typeFullName.l ++
+   cpg.parameter.typeFullName.l)
+    .distinct
+    .filterNot(isNoiseType)
+
+// 2) Types that are actually defined locally inside EXTRACTED
+val localTypeDeclFullNames =
   cpg.typeDecl
-    // drop synthetic/include-only types
-    .filterNot(td => td.file.name.headOption.getOrElse("") == "<includes>")
-    .filterNot(td => builtins.contains(td.name))
-    // keep only TF namespace (adjust pattern if your CPG uses different naming)
-    .filter(td => td.fullName.startsWith("tensorflow") || td.fullName.contains("tensorflow"))
-    // still apply: external/outside EXTRACTED root
-    .filter { td =>
-      val f = td.file.name.headOption.getOrElse("")
-      td.isExternal || !inExtracted(f)
-    }
-    .map { td =>
+    .filter(td => inExtracted(td.file.name.headOption.getOrElse("")))
+    .fullName
+    .toSet
+
+val missingTypeUsages =
+  cpg.identifier
+    .filter(id => id.typeFullName != null && id.typeFullName.nonEmpty && id.typeFullName != "ANY")
+    .filter(id => id.typeFullName.contains("tensorflow") || id.code.contains("TensorShape"))
+    .filterNot(id => localTypeDeclFullNames.contains(id.typeFullName))
+    .map { id =>
       Map(
         "kind" -> "type",
-        "reason" -> (if (td.isExternal) "external_type" else "defined_outside_extracted"),
-        "name" -> td.name,
-        "fullName" -> td.fullName,
-        "file" -> td.file.name.headOption.getOrElse("")
+        "reason" -> "referenced_but_not_defined_locally",
+        "name" -> id.typeFullName,
+        "code" -> id.code,
+        "file" -> id.file.name.headOption.getOrElse(""),
+        "line" -> id.lineNumber.getOrElse(-1)
       )
     }.l
 
 
-  val all = missingCalls ++ missingTypes
+  val all = missingCalls ++ missingTypeUsages
 
   def esc(s: String) = s.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n")
   val json = all.map { m =>
