@@ -25,6 +25,11 @@ def run_joern_missing_deps(cpg_bin: str, out_json: str, joern_cmd: str = "joern"
     ]
 
     proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+    
+    print("=== JOERN STDOUT ===")
+    print(proc.stdout)
+    print("=== JOERN STDERR ===")
+    print(proc.stderr)
     if proc.returncode != 0:
         raise JoernQueryError(
             f"Joern query failed.\nCommand: {' '.join(cmd)}\n\nSTDOUT:\n{proc.stdout}\n\nSTDERR:\n{proc.stderr}\n"

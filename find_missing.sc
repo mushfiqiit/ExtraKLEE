@@ -15,48 +15,64 @@ import java.nio.file.{Paths, Files}
   else Files.exists(Paths.get(extractedRoot).resolve(p))
 }
 
-  // Missing calls = calls whose target method is external OR not defined in EXTRACTED
+    // Materialize calls first (so side-effect prints always run)
+  val calls = cpg.call.filterNot(_.name.startsWith("<operator>")).l
+
+  // Debug: print per-call resolution info
+  calls.foreach { call =>
+    val mf = call.methodFullName
+    val targets = cpg.method.fullName(mf).l
+    if (targets.isEmpty) {
+      println(s"[DBG] call=${call.code} mf=$mf -> NO TARGET METHOD NODE")
+    } else {
+      val t = targets.head
+      val fileOpt = t.file.name.headOption.getOrElse("")
+      val isExternal = t.isExternal
+      val isLocal = inExtracted(fileOpt)
+      val hasBody = t.ast.size > 0
+      println(s"[DBG] call=${call.code} mf=$mf targetFile=$fileOpt isExternal=$isExternal isLocal=$isLocal hasBody=$hasBody")
+    }
+  }
+
+  // Now compute missingCalls without relying on println inside traversal
   val missingCalls =
-    cpg.call
-    .filterNot(_.name.startsWith("<operator>"))
-      .flatMap { call =>
-        val mf = call.methodFullName
-        val targets = cpg.method.fullName(mf).l
-        if (targets.isEmpty) {
+    calls.flatMap { call =>
+      val mf = call.methodFullName
+      val targets = cpg.method.fullName(mf).l
+      if (targets.isEmpty) {
+        List(Map(
+          "kind" -> "call",
+          "reason" -> "no_method_node",
+          "name" -> call.name,
+          "code" -> call.code,
+          "methodFullName" -> mf,
+          "file" -> call.file.name.headOption.getOrElse(""),
+          "line" -> call.lineNumber.getOrElse(-1)
+        ))
+      } else {
+        val t = targets.head
+        val fileOpt = t.file.name.headOption.getOrElse("")
+        val isExternal = t.isExternal
+        val isLocal = inExtracted(fileOpt)
+        val hasBody = t.ast.size > 0
+
+        if (isExternal || !isLocal) {
           List(Map(
             "kind" -> "call",
-            "reason" -> "no_method_node",
+            "reason" -> (if (isExternal) "external_method" else "defined_outside_extracted"),
             "name" -> call.name,
             "code" -> call.code,
             "methodFullName" -> mf,
-            "file" -> call.file.name.headOption.getOrElse(""),
-            "line" -> call.lineNumber.getOrElse(-1)
+            "callFile" -> call.file.name.headOption.getOrElse(""),
+            "callLine" -> call.lineNumber.getOrElse(-1),
+            "targetFile" -> fileOpt,
+            "targetIsExternal" -> isExternal.toString,
+            "targetHasBody" -> hasBody.toString
           ))
-        } else {
-          val t = targets.head
-          val fileOpt = t.file.name.headOption.getOrElse("")
-          val isExternal = t.isExternal
-          val isLocal = inExtracted(fileOpt)
-          val hasBody = t.ast.size > 0
+        } else Nil
+      }
+    }
 
-          if (isExternal || !isLocal || !hasBody) {
-            List(Map(
-              "kind" -> "call",
-              "reason" -> (if (isExternal) "external_method"
-                          else if (!isLocal) "defined_outside_extracted"
-                          else "no_body"),
-              "name" -> call.name,
-              "code" -> call.code,
-              "methodFullName" -> mf,
-              "callFile" -> call.file.name.headOption.getOrElse(""),
-              "callLine" -> call.lineNumber.getOrElse(-1),
-              "targetFile" -> fileOpt,
-              "targetIsExternal" -> isExternal.toString,
-              "targetHasBody" -> hasBody.toString
-            ))
-          } else Nil
-        }
-      }.l
 
 
 val builtins = Set(
