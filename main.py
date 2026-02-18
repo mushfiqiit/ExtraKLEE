@@ -48,7 +48,7 @@ def summarize_missing(items: List[Dict[str, Any]]) -> Tuple[int, int]:
     return calls, types
 
 if __name__ == "__main__":
-    cpg = generate_cpg("/home/mushfiqur/Desktop/Github/EXTRACTED")
+    cpg = generate_cpg("/home/mushfiqur/Desktop/Github/ExtraKLEE/EXTRACTED")
     print("Generated CPG:", cpg)
     missing = run_joern_missing_deps(
         cpg_bin="./joern-out/cpg.bin",
