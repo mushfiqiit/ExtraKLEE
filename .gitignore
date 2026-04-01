@@ -1,0 +1,4 @@
+joern-out/*.bin
+workspace/**/*.bin
+workspace/**/cpg.bin
+workspace/**/cpg.bin.tmp
