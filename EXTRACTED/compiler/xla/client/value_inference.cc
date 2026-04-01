@@ -1,0 +1,4 @@
+class InferenceContext {
+ public:
+ private:
+};

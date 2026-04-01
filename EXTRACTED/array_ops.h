@@ -1,5 +1,3 @@
-
-
 Status SetShapeFn(InferenceContext* c) {
       TF_RETURN_IF_ERROR(shape_inference::ValidateSparseTensor(
           c, c->input(0), c->input(1), c->input(2)));

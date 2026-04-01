@@ -1,0 +1,4 @@
+class Status {
+ public:
+ private:
+};

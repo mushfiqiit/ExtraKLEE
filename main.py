@@ -1,9 +1,9 @@
-from analyze_local_undefined_types import find_undefined_types
-from global_type_definition_lookup import find_definitions_for_types
+from analyze_missing_methods import find_missing_methods_with_usage
 
 
 def main() -> None:
-    print(find_definitions_for_types(find_undefined_types()))
+    missing_methods = find_missing_methods_with_usage()
+    print(missing_methods)
 
 
 if __name__ == "__main__":
