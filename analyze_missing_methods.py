@@ -2,11 +2,17 @@
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import List
+from typing import List, Optional
+ 
+# Extract the field name from indirectFieldAccess code: "obj->method" -> "method"
+_ARROW_RE = re.compile(r"->(\w+)\s*$")
+# Extract the field name from fieldAccess code: "obj.method" -> "method"
+_DOT_RE = re.compile(r"(?<![:\w])\.(\w+)\s*$")
 
 
 DEFAULT_LOCAL_CPG = Path("/home/mushfiqur/Desktop/Github/ExtraKLEE/joern-out/local.bin")
@@ -74,6 +80,7 @@ import io.shiftleft.semanticcpg.language.locationCreator
 
       !ignoredNames.contains(callName) &&
       callName.nonEmpty &&
+      !callName.startsWith("<") &&
       (unresolvedByFullName || unresolvedByName)
     }
     .map { c =>
@@ -133,6 +140,121 @@ import io.shiftleft.semanticcpg.language.locationCreator
 
     return missing_methods
 
+
+def _method_name_from_operator(op_name: str, code: str) -> Optional[str]:
+    """Extract the real method name from an operator CPG node's code field.
+ 
+    Joern models `obj->method(args)` as two operator call nodes:
+      - <operator>.indirectFieldAccess  code="obj->method"
+      - <operator>.pointerCall          code="obj->method(args)"
+ 
+    The actual name "method" lives in the indirectFieldAccess code after "->".
+    Likewise, `obj.method(args)` uses <operator>.fieldAccess with code "obj.method".
+    We extract the name here and skip everything else.
+    """
+    if op_name == "<operator>.indirectFieldAccess":
+        m = _ARROW_RE.search(code)
+        return m.group(1) if m else None
+    if op_name == "<operator>.fieldAccess":
+        m = _DOT_RE.search(code)
+        return m.group(1) if m else None
+    return None
+ 
+ 
+def find_all_calls_in_file(
+    file_suffix: str,
+    local_cpg_path: str | Path = DEFAULT_LOCAL_CPG,
+) -> List[dict]:
+    """Return every method call site in files whose path ends with file_suffix.
+ 
+    Covers both plain calls (OkStatus()) and pointer-member calls (c->method()).
+    The CPG models pointer-member calls as <operator>.indirectFieldAccess nodes
+    whose code field contains "obj->method"; we extract the method name from there.
+    """
+    local_cpg_path = Path(local_cpg_path)
+    if not local_cpg_path.exists():
+        raise FileNotFoundError(f"CPG file not found: {local_cpg_path}")
+ 
+    joern_bin = shutil.which("joern")
+    if not joern_bin:
+        raise RuntimeError("`joern` is not installed or not available in PATH.")
+ 
+    # Emit ALL call nodes for the file, including operator ones.
+    # Python post-processing extracts real names from operator nodes.
+    joern_script = f"""
+import io.shiftleft.semanticcpg.language.*
+ 
+@main def run(cpgFile: String): Unit = {{
+  importCpg(cpgFile)
+ 
+  val suffix = "{file_suffix}"
+ 
+  cpg.call
+    .filter(c => c.location.filename.endsWith(suffix))
+    .filter(c => Option(c.name).getOrElse("").nonEmpty)
+    .map {{ c =>
+      val name     = Option(c.name).getOrElse("")
+      val fileName = c.location.filename
+      val lineNo   = c.location.lineNumber.getOrElse(-1)
+      val code     = Option(c.code).getOrElse("")
+      (name, fileName, lineNo, code)
+    }}
+    .l
+    .distinct
+    .sortBy(x => (x._3, x._1))
+    .foreach {{ case (name, fileName, lineNo, code) =>
+      println(s"CALL:${{name}}\\t${{fileName}}\\t${{lineNo}}\\t${{code}}")
+    }}
+}}
+""".strip()
+ 
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        script_path = Path(tmp_dir) / "find_all_calls.sc"
+        script_path.write_text(joern_script, encoding="utf-8")
+        result = _run_joern_with_fallback(script_path, local_cpg_path, joern_bin)
+ 
+    calls: List[dict] = []
+    seen: set = set()
+ 
+    for line in result.stdout.splitlines():
+        if not line.startswith("CALL:"):
+            continue
+        parts = line[5:].split("\t", maxsplit=3)
+        if len(parts) != 4:
+            continue
+        raw_name, file_name, line_no_str, code = parts
+        try:
+            line_no = int(line_no_str)
+        except ValueError:
+            line_no = -1
+ 
+        if raw_name.startswith("<operator>"):
+            # Extract the real method name from the field-access code.
+            method_name = _method_name_from_operator(raw_name, code)
+            if not method_name:
+                continue  # arithmetic/logic/comparison operators – skip
+        else:
+            method_name = raw_name
+ 
+        key = (method_name, line_no)
+        if key in seen:
+            continue
+        seen.add(key)
+ 
+        calls.append(
+            {
+                "method_name": method_name,
+                "file": file_name,
+                "usage_line": line_no,
+                "usage_code": code,
+            }
+        )
+ 
+    return calls
+ 
+
+ 
+ 
 
 def list_methods_with_details(local_cpg_path: str | Path = DEFAULT_LOCAL_CPG) -> List[dict]:
     """Return methods in a concise, human-readable format.
